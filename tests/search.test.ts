@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { parseAmount, startOfStoreDay } from '../src/catalog'
-import { demoProducts } from '../src/demo'
+import { startOfStoreDay } from '../shared/store'
+import { parseAmount } from '../src/catalog'
+import { exampleProducts } from './fixtures'
 import { matchProducts, searchTokens } from '../src/search'
 
-const products = demoProducts()
+const products = exampleProducts()
 describe('Pencocokan katalog', () => {
   it('menormalkan kalimat, angka, satuan, dan ejaan dengan aksen', () => {
     for (const text of ['harga minyak Bimoli dua liter berapa', 'minyak Bímoli 2L', 'Bimoli 2000 ml']) {

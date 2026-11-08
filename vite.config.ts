@@ -2,23 +2,14 @@ import { createHash } from 'node:crypto'
 import { readFile, readdir, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import react from '@vitejs/plugin-react'
-import { loadEnv } from 'vite'
 import { defineConfig } from 'vitest/config'
-import { isPublicSupabaseKey } from './src/public-config'
+import { localStoreApi } from './server/vite-api'
 
-export default defineConfig(({ mode }) => ({
+export default defineConfig({
+  envPrefix: [],
   plugins: [
-    {
-      name: 'check-supabase-public-config',
-      config() {
-        const env = loadEnv(mode, process.cwd(), 'VITE_')
-        const key = env.VITE_SUPABASE_ANON_KEY?.trim()
-        if (key && !isPublicSupabaseKey(key)) {
-          throw new Error('VITE_SUPABASE_ANON_KEY harus berisi kunci publishable atau anon. Kunci privat dilarang di frontend.')
-        }
-      },
-    },
     react(),
+    localStoreApi(),
     {
       name: 'build-pwa-shell',
       apply: 'build',
@@ -42,4 +33,4 @@ export default defineConfig(({ mode }) => ({
     testTimeout: 15000,
     hookTimeout: 15000,
   },
-}))
+})

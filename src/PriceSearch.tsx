@@ -15,7 +15,7 @@ const missingSpeech = 'Barang tidak ditemukan.'
 const priceSpeech = (product: Product) =>
   `Harga ${productName(product)} ${product.variant}, ${String(product.sale_price).replace('.', ' koma ')} rupiah per ${product.unit}.`
 
-export default function PriceSearch({ catalog, online }: { catalog: Catalog; online: boolean }) {
+export default function PriceSearch({ catalog, online }: { catalog: Pick<Catalog, 'getActive' | 'searchCatalog'>; online: boolean }) {
   const [query, setQuery] = useState('')
   const [result, setResult] = useState<Result>({ type: 'idle' })
   const [lastQuery, setLastQuery] = useState('')
@@ -45,7 +45,7 @@ export default function PriceSearch({ catalog, online }: { catalog: Catalog; onl
       const selected = productId ? await catalog.getActive(productId, current.signal) : null
       const match = productId
         ? (selected ? { kind: 'found' as const, product: selected } : { kind: 'missing' as const })
-        : matchProducts(await catalog.list(true, current.signal), input, alternatives)
+        : matchProducts(await catalog.searchCatalog(current.signal), input, alternatives)
       if (current.signal.aborted || !navigator.onLine) return
       if (match.kind === 'found') {
         setResult({ type: 'price', product: match.product })

@@ -1,9 +1,28 @@
 import { expect, test, type Page } from '@playwright/test'
+import { exampleProducts } from './fixtures'
 
-async function enterDemo(page: Page) {
+const live = process.env.PW_REAL_DB === '1'
+
+async function openApp(page: Page, search = true) {
+  if (!live) {
+    const products = exampleProducts()
+    await page.route('**/api/store?*', (route) => {
+      const params = new URL(route.request().url()).searchParams
+      const id = params.get('id')
+      const data = params.get('resource') === 'dashboard'
+        ? { products, categories: [], changedToday: 0, adminUntil: null }
+        : id ? products.find((product) => product.id === id) ?? null : products
+      return route.fulfill({ json: data })
+    })
+  }
   await page.goto('/')
-  await page.getByRole('button', { name: 'Buka demo lokal' }).click()
-  await expect(page.getByRole('heading', { name: 'Tanya harga barang' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Dashboard produk' })).toBeVisible()
+  await expect(page.getByRole('listitem').filter({ hasText: 'Minyak Goreng Bimoli' })).toHaveCount(2)
+  await expect(page.getByText('Modal Rp 38.000')).toHaveCount(0)
+  if (search) {
+    await page.getByRole('link', { name: 'Cari Harga', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'Tanya harga barang' })).toBeVisible()
+  }
 }
 
 async function query(page: Page, value: string) {
@@ -48,9 +67,9 @@ async function mockSpeech(page: Page, mode: 'voice' | 'denied' | 'unsupported' |
   }, mode)
 }
 
-test('pencarian manual, pilihan ukuran, hasil kosong, sesi persisten dan logout di viewport Android', async ({ page }) => {
+test('dashboard terbuka langsung dan pencarian manual membedakan ukuran di viewport Android', async ({ page }) => {
   await mockSpeech(page, 'unsupported')
-  await enterDemo(page)
+  await openApp(page)
   await expect(page.getByRole('button', { name: 'Tanya Harga' })).toBeDisabled()
   await query(page, 'minyak bimoli')
   await expect(page.getByRole('heading', { name: 'Pilih barang yang dimaksud' })).toBeVisible()
@@ -60,15 +79,11 @@ test('pencarian manual, pilihan ukuran, hasil kosong, sesi persisten dan logout 
   await query(page, 'kopi imajiner')
   await expect(page.getByRole('heading', { name: 'Barang tidak ditemukan' })).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(412)
-  await page.reload()
-  await expect(page.getByRole('heading', { name: 'Tanya harga barang' })).toBeVisible()
-  await page.getByRole('button', { name: 'Keluar' }).click()
-  await expect(page.getByRole('heading', { name: 'Masuk ke toko' })).toBeVisible()
 })
 
 test('transkripsi id-ID menghasilkan harga dan satu jawaban suara', async ({ page }) => {
   await mockSpeech(page, 'voice')
-  await enterDemo(page)
+  await openApp(page)
   await page.getByRole('button', { name: 'Tanya Harga' }).click()
   await expect(page.getByText('Transkripsi suara')).toBeVisible()
   await expect(page.getByRole('region', { name: 'Hasil harga' })).toContainText('Rp 41.000')
@@ -80,7 +95,7 @@ test('transkripsi id-ID menghasilkan harga dan satu jawaban suara', async ({ pag
 
 test('izin mikrofon ditolak dan fallback tetap bekerja', async ({ page }) => {
   await mockSpeech(page, 'denied')
-  await enterDemo(page)
+  await openApp(page)
   await page.getByRole('button', { name: 'Tanya Harga' }).click()
   await expect(page.getByRole('alert')).toContainText('Izin mikrofon ditolak')
   await query(page, 'gula putih')
@@ -89,7 +104,7 @@ test('izin mikrofon ditolak dan fallback tetap bekerja', async ({ page }) => {
 
 test('mikrofon dapat dibatalkan dan harga disembunyikan saat offline', async ({ page, context }) => {
   await mockSpeech(page, 'cancel')
-  await enterDemo(page)
+  await openApp(page)
   await page.getByRole('button', { name: 'Tanya Harga' }).click()
   await expect(page.getByRole('button', { name: 'Selesai bicara' })).toBeVisible()
   await page.getByRole('button', { name: 'Batalkan' }).click()
@@ -102,35 +117,82 @@ test('mikrofon dapat dibatalkan dan harga disembunyikan saat offline', async ({ 
   await expect(page.getByRole('button', { name: 'Cari', exact: true })).toBeDisabled()
 })
 
-test('tambah, edit dengan konfirmasi dan audit, lalu nonaktifkan produk', async ({ page }) => {
-  await enterDemo(page)
-  await page.getByRole('link', { name: 'Dashboard' }).click()
+test('PIN, CRUD kategori dan produk, audit harga serta penguncian di MariaDB lokal', async ({ page }) => {
+  test.skip(!live, 'Jalankan dengan PW_REAL_DB=1 dan database lokal khusus pengujian.')
+  test.setTimeout(60_000)
+  const pin = process.env.PW_ADMIN_PIN
+  if (!pin) throw new Error('Isi PW_ADMIN_PIN dengan PIN khusus pengujian.')
+  await openApp(page, false)
+  await expect(page.getByRole('button', { name: 'Tambah produk' })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Buka mode admin' }).click()
+  await page.getByLabel('PIN admin').fill(pin === '000000' ? '111111' : '000000')
+  await page.getByRole('button', { name: 'Verifikasi PIN' }).click()
+  await expect(page.getByRole('alert')).toContainText('PIN salah')
+  await page.getByLabel('PIN admin').fill(pin)
+  await page.getByRole('button', { name: 'Verifikasi PIN' }).click()
+  await expect(page.getByText('Modal Rp 38.000')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Kelola kategori' }).click()
+  await page.getByLabel('Nama kategori', { exact: true }).fill('Bumbu Uji')
+  await page.getByRole('button', { name: 'Tambah kategori' }).click()
+  await expect(page.getByText('Kategori berhasil ditambahkan.')).toBeVisible()
+  await page.getByRole('button', { name: 'Kelola kategori' }).click()
+  await page.getByRole('button', { name: 'Edit kategori Bumbu Uji' }).click()
+  await page.getByLabel('Ubah nama kategori').fill('Bumbu Dapur Uji')
+  await page.getByRole('button', { name: 'Simpan kategori' }).click()
+  await expect(page.getByText('Kategori diperbarui.')).toBeVisible()
+
   await page.getByRole('button', { name: 'Tambah produk' }).click()
-  await page.getByLabel('Nama barang').fill('Kecap Manis')
+  await page.getByLabel('Nama barang').fill('Kecap Manis Uji')
   await page.getByLabel('Satuan').fill('botol')
   await page.getByLabel('Harga jual (Rp)').fill('14000')
+  await page.getByLabel('Harga modal (Rp)').fill('10000')
+  await page.getByRole('dialog').getByLabel('Kategori', { exact: true }).selectOption({ label: 'Bumbu Dapur Uji' })
   await page.getByRole('button', { name: 'Simpan produk' }).click()
   await expect(page.getByText('Produk berhasil ditambahkan.')).toBeVisible()
-  await page.getByRole('button', { name: 'Edit Kecap Manis' }).click()
+  await page.getByLabel('Filter kategori').selectOption({ label: 'Bumbu Dapur Uji' })
+  await expect(page.getByRole('listitem')).toHaveCount(1)
+  await page.getByRole('button', { name: 'Edit Kecap Manis Uji' }).click()
   await page.getByLabel('Harga jual (Rp)').fill('16000')
   await page.getByRole('button', { name: 'Simpan produk' }).click()
   await expect(page.getByRole('dialog')).toContainText('Rp 14.000')
   await expect(page.getByRole('dialog')).toContainText('Rp 16.000')
   await page.getByRole('button', { name: 'Ya, ubah harga' }).click()
-  await page.getByRole('button', { name: 'Riwayat Kecap Manis' }).click()
+  await page.getByRole('button', { name: 'Riwayat Kecap Manis Uji' }).click()
   await expect(page.getByRole('dialog')).toContainText('Rp 16.000')
-  await expect(page.getByRole('dialog')).toContainText('WIB · Anda')
+  await expect(page.getByRole('dialog')).toContainText('WIB')
   await page.getByRole('button', { name: 'Tutup' }).click()
   await page.getByRole('link', { name: 'Cari Harga' }).click()
-  await query(page, 'kecap manis')
+  await query(page, 'kecap manis uji')
   await expect(page.getByRole('region', { name: 'Hasil harga' })).toContainText('Rp 16.000')
   await page.getByRole('link', { name: 'Dashboard' }).click()
-  await page.getByRole('button', { name: 'Edit Kecap Manis' }).click()
+  await page.getByRole('button', { name: 'Edit Kecap Manis Uji' }).click()
   await page.getByLabel('Produk aktif dan dapat dicari').uncheck()
   await page.getByRole('button', { name: 'Simpan produk' }).click()
   await page.getByLabel('Status produk').selectOption('inactive')
-  await expect(page.getByRole('listitem').filter({ hasText: 'Kecap Manis' })).toContainText('Nonaktif')
-  await page.getByRole('link', { name: 'Cari Harga' }).click()
-  await query(page, 'kecap manis')
-  await expect(page.getByRole('heading', { name: 'Barang tidak ditemukan' })).toBeVisible()
+  const product = page.getByRole('listitem').filter({ hasText: 'Kecap Manis Uji' })
+  await expect(product).toContainText('Nonaktif')
+  await page.getByRole('button', { name: 'Kelola kategori' }).click()
+  await page.getByRole('button', { name: 'Hapus kategori Bumbu Dapur Uji' }).click()
+  await page.getByRole('button', { name: 'Hapus kategori', exact: true }).click()
+  await expect(page.getByText('Kategori berhasil dihapus.')).toBeVisible()
+  await expect(product).toBeVisible()
+  await expect(product).not.toContainText('Bumbu Dapur Uji')
+  await page.getByRole('button', { name: 'Hapus Kecap Manis Uji' }).click()
+  await page.getByRole('button', { name: 'Hapus produk', exact: true }).click()
+  await expect(product).toHaveCount(0)
+  await page.getByRole('button', { name: 'Riwayat harga', exact: true }).click()
+  await expect(page.getByRole('dialog')).toContainText('Kecap Manis Uji')
+  await page.getByRole('button', { name: 'Tutup' }).click()
+  await page.getByRole('button', { name: 'Kunci mode admin' }).click()
+  await expect(page.getByRole('button', { name: 'Buka mode admin' })).toBeVisible()
+  await expect(page.getByText('Modal Rp 38.000')).toHaveCount(0)
+  await expect.poll(() => page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true)
+  const cachedPaths = await page.evaluate(async () => {
+    const shell = (await caches.keys()).find((name) => name.startsWith('asisten-harga-shell-'))
+    if (!shell) return []
+    return (await (await caches.open(shell)).keys()).map((request) => new URL(request.url).pathname)
+  })
+  expect(cachedPaths).toContain('/index.html')
+  expect(cachedPaths.some((path) => path.startsWith('/api/'))).toBe(false)
 })

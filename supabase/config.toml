@@ -1,0 +1,31 @@
+project_id = "asisten-harga-sembako"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 17
+
+[db.seed]
+enabled = true
+sql_paths = ["./seed.sql"]
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:5173"
+enable_signup = false
+minimum_password_length = 8
+
+[auth.email]
+# Keep the email provider enabled for provisioned accounts. Global enable_signup blocks public signup.
+enable_signup = true
+enable_confirmations = false

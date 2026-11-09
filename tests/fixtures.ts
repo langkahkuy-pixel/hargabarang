@@ -1,4 +1,4 @@
-import type { Product, ProductDraft } from '../shared/store'
+import type { Backup, Product } from '../shared/store'
 
 const rows = [
   ['Minyak Goreng', 'Bimoli', '1 liter', 'pouch', 'MYK-001', ['minyak bimoli'], 21500, 24],
@@ -15,8 +15,9 @@ export const exampleProducts = (): Product[] => rows.map(([name, brand, variant,
   sale_price, stock_qty, is_active: true, created_at: new Date(0).toISOString(), updated_at: new Date(0).toISOString(),
 }))
 
-export const draft: ProductDraft = {
-  name: 'Kecap manis', brand: 'Lestari', variant: '500 ml', unit: 'botol',
-  category_id: null, sku: 'KCP-001', aliases: ['kecap lestari'], cost_price: 10000,
-  sale_price: 14000, stock_qty: 4, is_active: true,
-}
+export const exampleBackup = (): Backup => ({
+  format: 'asisten-harga', version: 1, categories: [], history: [],
+  products: exampleProducts().map((product) => ({
+    ...product, cost_price: product.sku === 'MYK-002' ? 38000 : null, deleted_at: null,
+  })),
+})

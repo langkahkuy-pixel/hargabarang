@@ -1,4 +1,4 @@
-import { MAX_AMOUNT, type Category, type DashboardData, type PriceChange, type Product, type ProductDraft } from '../shared/store'
+import { MAX_AMOUNT, type Backup, type Category, type DashboardData, type PriceChange, type Product, type ProductDraft } from '../shared/store'
 
 export type { Category, DashboardData, PriceChange, Product, ProductDraft }
 
@@ -12,7 +12,9 @@ export interface Catalog {
   saveCategory(name: string, original: Category | null): Promise<void>
   removeCategory(category: Category): Promise<void>
   unlock(pin: string): Promise<void>
-  lock(): Promise<void>
+  configurePin(pin: string | null): Promise<void>
+  exportBackup(): Promise<Backup>
+  importBackup(backup: Backup): Promise<void>
 }
 
 const money = new Intl.NumberFormat('id-ID', { maximumFractionDigits: 2 })
@@ -25,14 +27,9 @@ export const productName = (product: Product) => [product.name, product.brand].f
 export const productDescription = (product: Product) =>
   [product.variant, product.unit ? `per ${product.unit}` : ''].filter(Boolean).join(' · ')
 
-export class CatalogError extends Error {
-  constructor(message: string, public readonly code?: string) {
-    super(message)
-  }
-}
+export class CatalogError extends Error {}
 
 export const catalogErrorMessage = (error: unknown, fallback: string) => {
-  if (!navigator.onLine) return 'Koneksi terputus. Coba lagi saat perangkat tersambung.'
   if (error instanceof CatalogError) return error.message
   return fallback
 }

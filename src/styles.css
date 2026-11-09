@@ -57,11 +57,10 @@ svg { flex-shrink: 0; vertical-align: middle; }
   padding: 16px 0 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: .83rem;
 }
 .app-footer span:first-child { color: var(--green); font-weight: 750; }
-.offline, .notice, .success {
+.notice, .success {
   display: flex; align-items: center; gap: 10px; border: 1px solid #e5d6ae;
   background: #fff7e4; color: #5f450e; border-radius: 12px; padding: 11px 14px;
 }
-.offline { margin: 0 0 21px; }
 .notice { align-items: flex-start; }
 .notice svg { margin-top: 2px; }
 .notice-error { color: #872923; border-color: #efc7c2; background: #fff3f1; }

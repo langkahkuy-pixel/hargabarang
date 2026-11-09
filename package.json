@@ -4,20 +4,18 @@
   "version": "0.1.0",
   "type": "module",
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=24"
   },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run",
-    "test:db": "vitest run tests/mariadb.test.ts",
-    "test:ui": "playwright test",
-    "admin:pin": "node scripts/admin-pin.mjs"
+    "test:ui": "playwright test"
   },
   "dependencies": {
+    "@spelling-creator/spellophone": "0.2.1",
     "lucide-react": "^0.511.0",
-    "mariadb": "^3.5.5",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
   },

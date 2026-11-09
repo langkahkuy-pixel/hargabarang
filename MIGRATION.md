@@ -1,17 +1,53 @@
-# Rencana migrasi ke MariaDB
+# Memindahkan data lama ke IndexedDB
 
-Audit awal menemukan bahwa Supabase digunakan untuk sesi, profil, katalog, dan riwayat. React, Vite, PWA, komponen dashboard, pencocokan produk, serta pengenalan dan sintesis suara sudah terpisah dari penyimpanan data. Kode awal ada di commit `17fb2f1` untuk acuan pemulihan.
+IndexedDB mulai dengan katalog kosong pada setiap browser dan alamat situs. Pindahkan data melalui file JSON. Langkah ekspor di bawah hanya membaca data sumber.
 
-1. Buat skema satu toko di MariaDB dan API Vercel Functions. Sediakan katalog baca publik yang hanya memuat barang aktif serta harga jual. Verifikasi PIN di server untuk akses perubahan, harga modal, dan riwayat, dengan batas percobaan yang disimpan di MariaDB.
-2. Sambungkan dashboard langsung ke API baru. Pertahankan pencarian suara, fallback teks, konfirmasi perubahan harga, dan PWA. Tambahkan kategori dan penghapusan produk yang tetap menyimpan audit.
-3. Uji operasi database, otorisasi PIN, serta alur browser. Hapus adapter, dependensi, konfigurasi, dan tes Supabase setelah penggantinya siap. Simpan PRD lama sebagai referensi historis. Keputusan satu toko tanpa akun mengikuti dokumen ini dan README terbaru.
-4. Bila database lama berisi data yang akan dipakai, buat ekspor cadangan sebelum beralih. Gunakan [panduan pemindahan](#pemindahan-data-lama) dan verifikasi hasil di database tujuan. Mulai dari skema kosong jika toko belum mempunyai data nyata.
-5. Hubungkan repo GitHub ke Vercel setelah environment produksi siap. Periksa daftar produk dan riwayat sebelum mengalihkan penggunaan toko ke URL baru. Database lama dapat dipertahankan sebagai cadangan sampai hasil pemindahan dikonfirmasi.
+## Supabase lama
 
-## Pemindahan data lama
+Di SQL Editor Supabase, jalankan kueri berikut dengan UUID toko yang hendak dipindahkan. Kueri mengikuti skema historis proyek yang memisahkan harga modal ke tabel `product_costs`. Jika skema sumber sudah berubah, sesuaikan nama tabel dan kolomnya sebelum menjalankan.
 
-Gunakan akses administrator ke sumber lama dan ekspor produk untuk satu toko saja. Simpan ekspor di luar Git. Salin UUID dan atribut produk, gabungkan harga dari `product_costs` ke kolom `products.cost_price`, dan simpan alias sebagai array JSON. Isi `category_id` dengan NULL jika kategori belum dipetakan. Impor produk terlebih dahulu, kemudian salin riwayat dengan UUID produk yang sama, harga lama, harga baru, dan waktu dalam UTC. Riwayat baru menyimpan nama produk saat perubahan, jadi isi `product_label` saat impor. Identitas pengguna, tabel toko, dan profil tidak dibutuhkan di sistem baru.
+```sql
+WITH chosen_products AS (
+  SELECT * FROM public.products
+  WHERE store_id = 'GANTI-DENGAN-UUID-TOKO'::uuid
+)
+SELECT jsonb_build_object(
+  'format', 'asisten-harga',
+  'version', 1,
+  'categories', '[]'::jsonb,
+  'products', COALESCE((
+    SELECT jsonb_agg((to_jsonb(p) - 'store_id') || jsonb_build_object(
+      'category_id', NULL, 'cost_price', c.cost_price, 'revision', 1, 'deleted_at', NULL,
+      'created_at', to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+      'updated_at', to_char(p.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+    ))
+    FROM chosen_products p
+    LEFT JOIN public.product_costs c ON c.product_id = p.id AND c.store_id = p.store_id
+  ), '[]'::jsonb),
+  'history', COALESCE((
+    SELECT jsonb_agg((to_jsonb(h) - 'store_id' - 'changed_by') || jsonb_build_object(
+      'product_label', concat_ws(' ', p.name, nullif(p.brand, ''), nullif(p.variant, '')),
+      'changed_at', to_char(h.changed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+    ))
+    FROM public.price_history h
+    JOIN chosen_products p ON p.id = h.product_id AND p.store_id = h.store_id
+  ), '[]'::jsonb)
+) AS backup;
+```
 
-Untuk data demo yang pernah diedit di browser, salin objek dari Local Storage dengan kunci `asisten-harga:demo-catalog:v1` melalui DevTools. Data demo berisi produk, harga modal, dan riwayat. Buat pemetaan UUID baru untuk ID contoh seperti `demo-2` lalu gunakan pemetaan yang sama untuk harga modal dan riwayat. File seed MariaDB berisi data contoh awal untuk pengembangan.
+Salin nilai objek dari kolom `backup` ke file `cadangan-supabase.json`. Skema lama belum memiliki kategori, sehingga produk hasil migrasi masuk ke **Tanpa kategori**. Nama produk pada riwayat diambil dari katalog lama karena versi Supabase mencatat ID produk. Identitas akun tidak diperlukan di penyimpanan lokal.
 
-Bandingkan jumlah produk, SKU, harga, dan riwayat setelah impor. Uji satu produk melalui dashboard dan pencarian suara, lalu uji perubahan harga pada database uji sebelum mengaktifkan produksi. Simpan cadangan sampai hasil diperiksa. Migrasi skema tidak membaca atau mengubah database lama.
+## MariaDB lama
+
+Jika versi MariaDB pernah dipakai, ekspor seluruh baris `categories`, `products`, dan `price_history` dengan klien database secara baca saja. Susun hasilnya menjadi `{"format":"asisten-harga","version":1,"categories":[...],"products":[...],"history":[...]}`. Gunakan ketentuan berikut untuk menyiapkan JSON.
+
+- Kategori memakai `id` dan `name`. Produk memakai `id`, `category_id`, `name`, `brand`, `variant`, `unit`, `sku`, `aliases`, `sale_price`, `cost_price`, `stock_qty`, `is_active`, `revision`, `created_at`, `updated_at`, dan `deleted_at`.
+- Riwayat memakai `id`, `product_id`, `product_label`, `old_price`, `new_price`, dan `changed_at`. Sertakan produk yang sudah dihapus jika masih dirujuk riwayat. Pertahankan `deleted_at` agar produk itu tetap tersembunyi dari katalog.
+- Gunakan angka JSON untuk harga, stok, dan revisi, boolean JSON untuk `is_active`, array teks untuk `aliases`, dan `null` untuk kolom opsional yang kosong. Format waktu UTC sebagai `2026-11-09T02:00:00.000Z`. Kolom `DATETIME` pada skema sebelumnya sudah menggunakan UTC.
+- Kolom `live_sku` dan tabel percobaan PIN boleh diabaikan. Ambil contoh struktur yang dapat diimpor dengan memilih **Cadangan data → Ekspor JSON** pada aplikasi baru.
+
+## Impor dan verifikasi
+
+1. Buka aplikasi di alamat yang akan dipakai sehari-hari. Jika sudah ada katalog lokal, simpan cadangan lewat **Cadangan data → Ekspor JSON** terlebih dahulu.
+2. Pilih file JSON melalui **Cadangan data**. Jika ada penolakan, perbaiki nilai yang disebutkan pada salinan JSON dan simpan ekspor asli. Cocokkan jumlah produk, kategori, dan perubahan harga pada ringkasan. Pilih **Ganti data dengan cadangan** setelah jumlahnya sesuai.
+3. Periksa beberapa SKU, harga jual, harga modal, dan entri riwayat. Muat ulang halaman dan ulangi pencarian untuk memastikan data tersimpan. Simpan file ekspor asli bersama cadangan lokal yang telah diperiksa.

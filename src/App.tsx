@@ -1,30 +1,23 @@
 import { useEffect, useState } from 'react'
-import { LayoutDashboard, Mic, WifiOff } from 'lucide-react'
+import { LayoutDashboard, Mic } from 'lucide-react'
 import Dashboard from './Dashboard'
 import PriceSearch from './PriceSearch'
-import { storeCatalog } from './store-api'
+import { storeCatalog } from './local-catalog'
 import { Brand } from './ui'
 
 const route = () => window.location.hash === '#cari' ? 'search' : 'dashboard'
 
 export default function App() {
   const [page, setPage] = useState(route)
-  const [online, setOnline] = useState(navigator.onLine)
+  const [adminUntil, setAdminUntil] = useState(0)
 
   useEffect(() => {
-    const update = () => setOnline(navigator.onLine)
     const navigate = () => {
       setPage(route())
       window.scrollTo(0, 0)
     }
-    window.addEventListener('online', update)
-    window.addEventListener('offline', update)
     window.addEventListener('hashchange', navigate)
-    return () => {
-      window.removeEventListener('online', update)
-      window.removeEventListener('offline', update)
-      window.removeEventListener('hashchange', navigate)
-    }
+    return () => window.removeEventListener('hashchange', navigate)
   }, [])
 
   const dashboard = page === 'dashboard'
@@ -43,8 +36,9 @@ export default function App() {
       </div>
     </header>
     <main id="main-content" tabIndex={-1} className="shell">
-      {!online && <div className="offline" role="alert"><WifiOff size={19} /> Perangkat offline. Harga terkini belum bisa dimuat.</div>}
-      {dashboard ? <Dashboard catalog={storeCatalog} online={online} /> : <PriceSearch catalog={storeCatalog} online={online} />}
+      {dashboard
+        ? <Dashboard catalog={storeCatalog} adminUntil={adminUntil} setAdminUntil={setAdminUntil} />
+        : <PriceSearch catalog={storeCatalog} />}
     </main>
     <footer className="app-footer"><span>Asisten Harga</span><span>Untuk toko sembako Anda</span></footer>
   </>

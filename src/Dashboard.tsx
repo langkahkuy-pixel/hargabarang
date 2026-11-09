@@ -1,14 +1,16 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { Clock3, History, Lock, Mic, Package, Pencil, Plus, RefreshCw, Search, Tag, Trash2, TrendingUp, Unlock } from 'lucide-react'
+import { Archive, Clock3, History, Lock, Mic, Package, Pencil, Plus, RefreshCw, Search, Tag, Trash2, TrendingUp, Unlock } from 'lucide-react'
 import {
   CatalogError, catalogErrorMessage, localDateTime, parseAmount, productDescription, productName, rupiah,
   type Catalog, type Category, type DashboardData, type PriceChange, type Product, type ProductDraft,
 } from './catalog'
 import { searchTokens } from './search'
 import { Loading, Modal, Notice } from './ui'
+import BackupDialog from './BackupDialog'
 
 type View = { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'loaded'; snapshot: DashboardData }
-type Dialog = { kind: 'edit' | 'history'; product: Product | null } | { kind: 'delete'; product: Product } | { kind: 'unlock' | 'categories' }
+type Dialog = { kind: 'edit' | 'history'; product: Product | null } | { kind: 'delete'; product: Product } | { kind: 'unlock' | 'pin' | 'categories' | 'backup' }
+const adminDuration = 30 * 60 * 1000
 
 function filterProducts(products: Product[], query: string, status: string, category: string) {
   const tokens = searchTokens(query)
@@ -24,7 +26,9 @@ function filterProducts(products: Product[], query: string, status: string, cate
   })
 }
 
-export default function Dashboard({ catalog, online }: { catalog: Catalog; online: boolean }) {
+export default function Dashboard({ catalog, adminUntil, setAdminUntil }: {
+  catalog: Catalog; adminUntil: number; setAdminUntil: (until: number) => void
+}) {
   const [view, setView] = useState<View>({ kind: 'loading' })
   const [revision, setRevision] = useState(0)
   const [query, setQuery] = useState('')
@@ -32,11 +36,8 @@ export default function Dashboard({ catalog, online }: { catalog: Catalog; onlin
   const [category, setCategory] = useState('all')
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const [success, setSuccess] = useState('')
-  const [lockBusy, setLockBusy] = useState(false)
-  const [lockError, setLockError] = useState('')
 
   useEffect(() => {
-    if (!online) return
     const request = new AbortController()
     setView({ kind: 'loading' })
     void catalog.dashboard(request.signal).then((snapshot) => {
@@ -48,12 +49,11 @@ export default function Dashboard({ catalog, online }: { catalog: Catalog; onlin
       if (!request.signal.aborted) setView({ kind: 'error', message: catalogErrorMessage(error, 'Katalog gagal dimuat.') })
     })
     return () => request.abort()
-  }, [catalog, online, revision])
+  }, [catalog, revision])
 
   const snapshot = view.kind === 'loaded' ? view.snapshot : null
-  const adminUntil = snapshot?.adminUntil
-  const admin = online && Boolean(adminUntil && adminUntil > Date.now())
-  const products = snapshot?.products ?? []
+  const admin = Boolean(snapshot && (!snapshot.hasPin || adminUntil > Date.now()))
+  const products = snapshot?.products.filter((product) => admin || product.is_active) ?? []
   const categories = snapshot?.categories ?? []
   const categoryNames = new Map(categories.map((item) => [item.id, item.name]))
   const selectedCategory = category === 'none' || categoryNames.has(category) ? category : 'all'
@@ -70,25 +70,10 @@ export default function Dashboard({ catalog, online }: { catalog: Catalog; onlin
     if (!adminUntil || adminUntil <= Date.now()) return
     const timer = window.setTimeout(() => {
       setDialog(null)
-      setView({ kind: 'loading' })
-      setRevision((value) => value + 1)
+      setAdminUntil(0)
     }, adminUntil - Date.now() + 100)
     return () => window.clearTimeout(timer)
-  }, [adminUntil])
-
-  async function lock() {
-    setLockBusy(true)
-    setLockError('')
-    try {
-      await catalog.lock()
-      setView({ kind: 'loading' })
-      saved('Mode admin dikunci.')
-    } catch (error) {
-      setLockError(catalogErrorMessage(error, 'Mode admin gagal dikunci.'))
-    } finally {
-      setLockBusy(false)
-    }
-  }
+  }, [adminUntil, setAdminUntil])
 
   return <div className="dashboard">
     <div className="page-heading dashboard-heading">
@@ -102,30 +87,33 @@ export default function Dashboard({ catalog, online }: { catalog: Catalog; onlin
 
     <div className="metrics">
       <div className="metric"><span className="metric-icon"><Package size={24} /></span>
-        <div><strong>{online && snapshot ? products.filter((product) => product.is_active).length : '—'}</strong><span>Produk aktif</span></div>
+        <div><strong>{snapshot ? products.filter((product) => product.is_active).length : '—'}</strong><span>Produk aktif</span></div>
       </div>
       <div className="metric"><span className="metric-icon amber"><TrendingUp size={24} /></span>
-        <div><strong>{online && snapshot ? snapshot.changedToday : '—'}</strong><span>Produk berubah harga hari ini</span></div>
+        <div><strong>{snapshot ? snapshot.changedToday : '—'}</strong><span>Produk berubah harga hari ini</span></div>
       </div>
     </div>
 
     {success && <div className="success" role="status">{success}</div>}
-    {lockError && <Notice error>{lockError}</Notice>}
     <section className="catalog-card" aria-labelledby="catalog-title">
       <div className="catalog-head">
         <div><h2 id="catalog-title">Katalog produk</h2><p className="muted">Barang dan harga yang tersimpan di toko.</p></div>
         <div className="catalog-actions">
-          {admin
-            ? <button type="button" className="button secondary" disabled={lockBusy} onClick={() => void lock()}><Lock size={18} /> Kunci mode admin</button>
-            : <button type="button" className="button secondary" disabled={!online}
-              onClick={() => { setLockError(''); setDialog({ kind: 'unlock' }) }}><Unlock size={18} /> Buka mode admin</button>}
-          <button type="button" className="icon-button" disabled={!online} onClick={refresh} aria-label="Muat ulang katalog"><RefreshCw size={19} /></button>
+          {snapshot?.hasPin && (admin
+            ? <button type="button" className="button secondary" onClick={() => {
+              setAdminUntil(0)
+              setSuccess('Mode admin dikunci.')
+            }}><Lock size={18} /> Kunci mode admin</button>
+            : <button type="button" className="button secondary" onClick={() => setDialog({ kind: 'unlock' })}><Unlock size={18} /> Buka mode admin</button>)}
+          <button type="button" className="icon-button" onClick={refresh} aria-label="Muat ulang katalog"><RefreshCw size={19} /></button>
         </div>
       </div>
       {admin && <div className="catalog-actions manage-actions">
         <button type="button" className="button primary" onClick={() => setDialog({ kind: 'edit', product: null })}><Plus size={18} /> Tambah produk</button>
         <button type="button" className="button secondary" onClick={() => setDialog({ kind: 'categories' })}><Tag size={18} /> Kelola kategori</button>
         <button type="button" className="button secondary" onClick={() => setDialog({ kind: 'history', product: null })}><History size={18} /> Riwayat harga</button>
+        <button type="button" className="button secondary" onClick={() => setDialog({ kind: 'backup' })}><Archive size={18} /> Cadangan data</button>
+        <button type="button" className="button secondary" onClick={() => setDialog({ kind: 'pin' })}><Lock size={18} /> PIN lokal</button>
       </div>}
       <div className="filters">
         <div className="input-icon"><Search size={19} aria-hidden="true" />
@@ -140,10 +128,9 @@ export default function Dashboard({ catalog, online }: { catalog: Catalog; onlin
           <option value="all">Semua status</option><option value="active">Aktif</option><option value="inactive">Nonaktif</option>
         </select>}
       </div>
-      {!online && <div className="empty"><p>Katalog tersedia saat perangkat terhubung.</p></div>}
-      {online && view.kind === 'loading' && <Loading>Memuat katalog…</Loading>}
-      {online && view.kind === 'error' && <Notice error>{view.message} <button type="button" className="text-button" onClick={refresh}>Coba lagi</button></Notice>}
-      {online && snapshot && (filtered.length ? <ul className="product-list">
+      {view.kind === 'loading' && <Loading>Memuat katalog…</Loading>}
+      {view.kind === 'error' && <Notice error>{view.message} <button type="button" className="text-button" onClick={refresh}>Coba lagi</button></Notice>}
+      {snapshot && (filtered.length ? <ul className="product-list">
         {filtered.map((product) => <li key={product.id} className="product-row">
           <span className="product-icon"><Package size={23} aria-hidden="true" /></span>
           <div className="product-info">
@@ -152,11 +139,11 @@ export default function Dashboard({ catalog, online }: { catalog: Catalog; onlin
             <div className="product-tags">
               <span className={`status-badge ${product.is_active ? '' : 'inactive'}`}>{product.is_active ? 'Aktif' : 'Nonaktif'}</span>
               {product.category_id && <small>{categoryNames.get(product.category_id)}</small>}
-              {product.stock_qty !== null && <small>Stok {product.stock_qty.toLocaleString('id-ID')}</small>}
+              {admin && product.stock_qty !== null && <small>Stok {product.stock_qty.toLocaleString('id-ID')}</small>}
             </div>
           </div>
           <div className="product-money">
-            <strong>{rupiah(product.sale_price)}</strong>
+            <strong>{rupiah(product.sale_price)}{product.weight_rounding !== undefined && ' / kg'}</strong>
             {admin && snapshot.costs?.[product.id] !== undefined && <small>Modal {rupiah(snapshot.costs[product.id])}</small>}
           </div>
           {admin && <div className="row-actions">
@@ -174,7 +161,20 @@ export default function Dashboard({ catalog, online }: { catalog: Catalog; onlin
       </div>)}
     </section>
 
-    {dialog?.kind === 'unlock' && <AdminDialog catalog={catalog} online={online} onClose={close} onUnlocked={() => saved('Mode admin terbuka.')} />}
+    {dialog?.kind === 'unlock' && <AdminDialog catalog={catalog} configure={false} hasPin onClose={close} onSaved={(enabled) => {
+      setAdminUntil(enabled ? Date.now() + adminDuration : 0)
+      saved('Mode admin terbuka.')
+    }} />}
+    {admin && dialog?.kind === 'pin' && <AdminDialog catalog={catalog} configure hasPin={Boolean(snapshot?.hasPin)} onClose={close} onSaved={(enabled) => {
+      setAdminUntil(enabled ? Date.now() + adminDuration : 0)
+      saved(enabled ? 'PIN lokal tersimpan.' : 'PIN lokal dihapus.')
+    }} />}
+    {admin && dialog?.kind === 'backup' && <BackupDialog catalog={catalog} onClose={close} onImported={() => {
+      setQuery('')
+      setCategory('all')
+      setStatus('all')
+      saved('Cadangan berhasil diimpor.')
+    }} />}
     {admin && dialog?.kind === 'edit' && <ProductEditor product={dialog.product} cost={dialog.product ? snapshot?.costs?.[dialog.product.id] : undefined}
       categories={categories} catalog={catalog} onClose={close} onSaved={() => saved(dialog.product ? 'Perubahan produk tersimpan.' : 'Produk berhasil ditambahkan.')} />}
     {admin && dialog?.kind === 'history' && <HistoryDialog catalog={catalog} product={dialog.product} onClose={close} />}
@@ -193,6 +193,9 @@ function ProductEditor({ product, cost, categories, catalog, onClose, onSaved }:
   const [confirmation, setConfirmation] = useState<ProductDraft | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [byWeight, setByWeight] = useState(product?.weight_rounding !== undefined)
+  const [unit, setUnit] = useState(product?.unit ?? '')
+  const priceLabel = byWeight ? 'Harga jual per kg (Rp)' : 'Harga jual (Rp)'
 
   async function save(draft: ProductDraft) {
     setBusy(true)
@@ -220,6 +223,7 @@ function ProductEditor({ product, cost, categories, catalog, onClose, onSaved }:
         aliases: [...new Set(field('aliases').split(/[,\n]/).map((alias) => alias.trim()).filter(Boolean))],
         cost_price: parseAmount(field('cost'), 'Harga modal'),
         sale_price: parseAmount(field('sale'), 'Harga jual', true)!,
+        weight_rounding: byWeight ? parseAmount(field('rounding'), 'Pembulatan') ?? 0 : undefined,
         stock_qty: parseAmount(field('stock'), 'Stok'),
         is_active: values.has('active'),
       }
@@ -238,15 +242,21 @@ function ProductEditor({ product, cost, categories, catalog, onClose, onSaved }:
         <label>Nama barang <input required name="name" maxLength={100} defaultValue={product?.name} placeholder="Minyak goreng" /></label>
         <label>Merek <small>opsional</small><input name="brand" maxLength={80} defaultValue={product?.brand} placeholder="Bimoli" /></label>
         <label>Varian / ukuran <small>opsional</small><input name="variant" maxLength={80} defaultValue={product?.variant} placeholder="2 liter" /></label>
-        <label>Satuan <input required name="unit" maxLength={40} defaultValue={product?.unit} placeholder="pouch" /></label>
+        <label>Satuan <input required name="unit" maxLength={40} value={byWeight ? 'kg' : unit} readOnly={byWeight}
+          onChange={(event) => setUnit(event.target.value)} placeholder="pouch" /></label>
         <label>Kategori <select name="category" aria-label="Kategori" defaultValue={product?.category_id ?? ''}>
           <option value="">Tanpa kategori</option>
           {categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
         </select></label>
         <label>SKU <small>opsional</small><input name="sku" maxLength={60} defaultValue={product?.sku ?? ''} /></label>
-        <label>Stok <small>opsional</small><input name="stock" inputMode="decimal" defaultValue={inputAmount(product?.stock_qty)} /></label>
-        <label>Harga jual (Rp) <input required name="sale" inputMode="decimal" defaultValue={inputAmount(product?.sale_price)} placeholder="41000" /></label>
-        <label>Harga modal (Rp) <small>opsional</small><input name="cost" inputMode="decimal" defaultValue={inputAmount(cost)} /></label>
+        <label>{byWeight ? 'Stok (kg)' : 'Stok'} <small>opsional</small><input name="stock" inputMode="decimal" defaultValue={inputAmount(product?.stock_qty)} /></label>
+        <label>{priceLabel} <input required name="sale" inputMode="decimal" defaultValue={inputAmount(product?.sale_price)} placeholder="41000" /></label>
+        <label>{byWeight ? 'Harga modal per kg (Rp)' : 'Harga modal (Rp)'} <small>opsional</small><input name="cost" inputMode="decimal" defaultValue={inputAmount(cost)} /></label>
+        <label className="checkbox-label full-width"><input type="checkbox" checked={byWeight} onChange={(event) => setByWeight(event.target.checked)} /> Jual curah berdasarkan berat</label>
+        {byWeight && <label className="full-width">Pembulatan ke atas (Rp)
+          <input name="rounding" inputMode="numeric" pattern="[0-9]*" defaultValue={product?.weight_rounding ?? 0} />
+          <small>Berlaku untuk berat pecahan kg. Isi 0 untuk harga proporsional.</small>
+        </label>}
         <label className="full-width">Alias pencarian <small>pisahkan dengan koma</small>
           <textarea name="aliases" rows={2} maxLength={800} defaultValue={product?.aliases.join(', ')} placeholder="minyak bimoli, minyak goreng bimoli" />
         </label>
@@ -300,38 +310,44 @@ function HistoryDialog({ product, catalog, onClose }: {
   </Modal>
 }
 
-function AdminDialog({ catalog, online, onClose, onUnlocked }: {
-  catalog: Catalog; online: boolean; onClose: () => void; onUnlocked: () => void
+function AdminDialog({ catalog, configure, hasPin, onClose, onSaved }: {
+  catalog: Catalog; configure: boolean; hasPin: boolean; onClose: () => void; onSaved: (enabled: boolean) => void
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const form = event.currentTarget
-    const pin = String(new FormData(form).get('pin') ?? '')
-    form.reset()
+  async function savePin(pin: string | null) {
     setBusy(true)
     setError('')
     try {
-      await catalog.unlock(pin)
-      onUnlocked()
+      if (configure) await catalog.configurePin(pin)
+      else if (pin !== null) await catalog.unlock(pin)
+      onSaved(pin !== null)
     } catch (failure) {
-      setError(catalogErrorMessage(failure, 'Mode admin gagal dibuka.'))
+      setError(catalogErrorMessage(failure, 'PIN lokal gagal diproses.'))
     } finally {
       setBusy(false)
     }
   }
 
-  return <Modal title="Buka mode admin" busy={busy} onClose={onClose}>
-    <p className="muted">Masukkan PIN toko untuk mengubah katalog serta melihat harga modal dan riwayat harga.</p>
+  return <Modal title={configure ? 'Atur PIN lokal' : 'Buka mode admin'} busy={busy} onClose={onClose}>
+    <p className="muted">{configure
+      ? 'PIN opsional mengunci tampilan mode admin di browser ini.'
+      : 'Masukkan PIN lokal untuk mengubah katalog serta melihat harga modal dan riwayat harga.'}</p>
     {error && <Notice error>{error}</Notice>}
-    <form onSubmit={(event) => void submit(event)} className="dialog-form" autoComplete="off">
+    <form onSubmit={(event) => {
+      event.preventDefault()
+      const form = event.currentTarget
+      const pin = String(new FormData(form).get('pin') ?? '')
+      form.reset()
+      void savePin(pin)
+    }} className="dialog-form" autoComplete="off">
       <label>PIN admin <input name="pin" type="password" inputMode="numeric" autoComplete="off"
         required minLength={6} maxLength={12} pattern="[0-9]{6,12}" /></label>
       <div className="modal-actions">
         <button type="button" className="button secondary" disabled={busy} onClick={onClose}>Batal</button>
-        <button type="submit" className="button primary" disabled={busy || !online}>{busy ? 'Memeriksa…' : 'Verifikasi PIN'}</button>
+        {configure && hasPin && <button type="button" className="button secondary" disabled={busy} onClick={() => void savePin(null)}>Hapus PIN</button>}
+        <button type="submit" className="button primary" disabled={busy}>{configure ? 'Simpan PIN' : 'Verifikasi PIN'}</button>
       </div>
     </form>
   </Modal>

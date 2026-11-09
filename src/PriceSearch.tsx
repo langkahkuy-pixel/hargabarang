@@ -1,27 +1,27 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { ArrowRight, AudioLines, CircleHelp, Mic, MicOff, PackageCheck, Search, Square, Volume2 } from 'lucide-react'
-import { catalogErrorMessage, productDescription, productName, rupiah, type Catalog, type Product } from './catalog'
-import { matchProducts } from './search'
+import { catalogErrorMessage, productDescription, productName, rupiah, type Catalog } from './catalog'
+import { priceAnswer } from './price-answer'
+import { matchProducts, type Choice } from './search'
+import { useSpeech } from './speech'
 import { Loading, Notice } from './ui'
-import { useRecognition, useSpeech } from './voice'
+import { useRecognition } from './voice'
+import { displayWeight, weightPrice } from './weight-price'
 
 type Result = { type: 'idle' | 'loading' }
   | { type: 'message'; title: string; detail: string; error?: boolean }
-  | { type: 'choices'; items: Product[] }
-  | { type: 'price'; product: Product }
+  | { type: 'choices'; items: Choice[] }
+  | ({ type: 'price'; amount: number; rounded: boolean } & Choice)
 
-const examples = ['Minyak Bimoli 2 liter', 'Gula Gulaku', 'Beras pandan']
+const examples = ['Minyak Bimoli 2 liter', 'Gula pasir setengah kilo', 'Beras curah dua kilo']
 const missingSpeech = 'Barang tidak ditemukan.'
-const priceSpeech = (product: Product) =>
-  `Harga ${productName(product)} ${product.variant}, ${String(product.sale_price).replace('.', ' koma ')} rupiah per ${product.unit}.`
-
-export default function PriceSearch({ catalog, online }: { catalog: Pick<Catalog, 'getActive' | 'searchCatalog'>; online: boolean }) {
+export default function PriceSearch({ catalog }: { catalog: Pick<Catalog, 'getActive' | 'searchCatalog'> }) {
   const [query, setQuery] = useState('')
   const [result, setResult] = useState<Result>({ type: 'idle' })
   const [lastQuery, setLastQuery] = useState('')
   const request = useRef<AbortController | null>(null)
   const resultArea = useRef<HTMLDivElement>(null)
-  const { available, speaking, speak, stop } = useSpeech()
+  const { available, speaking, playing, error: speechError, prepare, speak, stop } = useSpeech()
 
   const clearResult = useCallback(() => {
     request.current?.abort()
@@ -30,9 +30,8 @@ export default function PriceSearch({ catalog, online }: { catalog: Pick<Catalog
     setLastQuery('')
   }, [stop])
 
-  async function search(input: string, alternatives: string[] = [], productId?: string) {
+  async function search(input: string, alternatives: string[] = [], choice?: Choice) {
     clearResult()
-    if (!navigator.onLine) return
     if (!input.trim()) {
       setResult({ type: 'message', title: 'Ketik nama barang', detail: 'Gunakan nama, merek, ukuran, atau SKU untuk mencari.' })
       return
@@ -42,16 +41,21 @@ export default function PriceSearch({ catalog, online }: { catalog: Pick<Catalog
     setLastQuery(input.trim())
     setResult({ type: 'loading' })
     try {
-      const selected = productId ? await catalog.getActive(productId, current.signal) : null
-      const match = productId
-        ? (selected ? { kind: 'found' as const, product: selected } : { kind: 'missing' as const })
+      const selected = choice ? await catalog.getActive(choice.product.id, current.signal) : null
+      const match = choice
+        ? (selected && (choice.grams === undefined || selected.weight_rounding !== undefined)
+          ? { kind: 'found' as const, product: selected, grams: choice.grams } : { kind: 'missing' as const })
         : matchProducts(await catalog.searchCatalog(current.signal), input, alternatives)
-      if (current.signal.aborted || !navigator.onLine) return
+      if (current.signal.aborted) return
       if (match.kind === 'found') {
-        setResult({ type: 'price', product: match.product })
-        speak(priceSpeech(match.product))
+        const quote = match.grams === undefined
+          ? { amount: match.product.sale_price, rounded: false }
+          : weightPrice(match.product, match.grams)
+        const price = { type: 'price' as const, product: match.product, grams: match.grams, ...quote }
+        setResult(price)
+        speak(priceAnswer(price))
       } else if (match.kind === 'choices') {
-        setResult({ type: 'choices', items: match.products })
+        setResult({ type: 'choices', items: match.choices })
         if (alternatives.length) speak('Pilih barang yang dimaksud pada layar.')
       } else {
         setResult({
@@ -63,7 +67,7 @@ export default function PriceSearch({ catalog, online }: { catalog: Pick<Catalog
     } catch (error) {
       if (!current.signal.aborted) setResult({
         type: 'message', title: 'Harga gagal dimuat',
-        detail: catalogErrorMessage(error, 'Periksa koneksi lalu coba lagi.'), error: true,
+        detail: catalogErrorMessage(error, 'Penyimpanan lokal gagal dibaca. Coba lagi.'), error: true,
       })
     }
   }
@@ -75,16 +79,14 @@ export default function PriceSearch({ catalog, online }: { catalog: Pick<Catalog
   const { cancel } = voice
   useEffect(() => () => request.current?.abort(), [])
   useEffect(() => {
-    if (!online) { cancel(); clearResult() }
-  }, [online, cancel, clearResult])
-  useEffect(() => {
-    if (online && result.type !== 'idle' && result.type !== 'loading') {
+    if (result.type !== 'idle' && result.type !== 'loading') {
       resultArea.current?.scrollIntoView({ block: 'nearest' })
     }
-  }, [online, result])
+  }, [result])
 
   function manual(event: FormEvent) {
     event.preventDefault()
+    prepare()
     cancel()
     void search(query)
   }
@@ -104,17 +106,17 @@ export default function PriceSearch({ catalog, online }: { catalog: Pick<Catalog
     <div className="page-heading">
       <div className="eyebrow"><span className="status-dot" /> PENCARIAN HARGA</div>
       <h1>Tanya harga barang</h1>
-      <p>Sebutkan atau ketik nama barang untuk mengetahui harga jualnya.</p>
+      <p>Sebutkan atau ketik nama barang. Untuk barang curah, sertakan berat dalam gram, ons, atau kilo.</p>
     </div>
 
     <section className={`voice-card ${recording ? 'voice-active' : ''}`} aria-label="Pencarian dengan suara">
       <div className="voice-decoration" aria-hidden="true"><i /><i /><i /></div>
       <div className="voice-tag"><AudioLines size={16} /> PENCARIAN SUARA</div>
       <button className="mic-button" type="button" aria-label={micLabel}
-        disabled={!online || !voice.supported || voice.phase === 'requesting' || voice.phase === 'finishing'}
+        disabled={!voice.supported || voice.phase === 'requesting' || voice.phase === 'finishing'}
         onClick={() => {
           if (voice.phase === 'listening') voice.finish()
-          else { clearResult(); voice.start() }
+          else { clearResult(); prepare(); voice.start() }
         }}>
         {!voice.supported ? <MicOff size={34} /> : voice.phase === 'listening' ? <Square size={30} /> : <Mic size={36} />}
       </button>
@@ -140,13 +142,14 @@ export default function PriceSearch({ catalog, online }: { catalog: Pick<Catalog
                 setQuery(event.target.value)
               }} />
           </div>
-          <button type="submit" className="button primary" disabled={!online}>Cari <ArrowRight size={18} aria-hidden="true" /></button>
+          <button type="submit" className="button primary">Cari <ArrowRight size={18} aria-hidden="true" /></button>
         </div>
       </form>
       <div className="examples">
         <span>Contoh pencarian</span>
         <div className="chips">{examples.map((example) =>
-          <button className="chip" type="button" key={example} disabled={!online} onClick={() => {
+          <button className="chip" type="button" key={example} onClick={() => {
+            prepare()
             cancel()
             setQuery(example)
             void search(example)
@@ -155,35 +158,43 @@ export default function PriceSearch({ catalog, online }: { catalog: Pick<Catalog
       </div>
     </section>
 
-    <div ref={resultArea} hidden={!online || result.type === 'idle'}>
-      {online && result.type === 'loading' && <Loading>Mencari harga di katalog toko…</Loading>}
-      {online && result.type === 'message' && (result.error
+    <div ref={resultArea} hidden={result.type === 'idle'}>
+      {result.type === 'loading' && <Loading>Mencari harga di katalog toko…</Loading>}
+      {result.type === 'message' && (result.error
         ? <Notice error><strong>{result.title}</strong><p>{result.detail}</p></Notice>
         : <section className="empty result-card" role="status">
           <CircleHelp size={28} aria-hidden="true" /><h2>{result.title}</h2><p>{result.detail}</p>
         </section>)}
-      {online && result.type === 'choices' && <section className="result-card" aria-labelledby="choices-title">
+      {result.type === 'choices' && <section className="result-card" aria-labelledby="choices-title">
         <h2 id="choices-title">Pilih barang yang dimaksud</h2>
         <p className="muted" role="status">Hasil untuk “{lastQuery}”. Ketuk barang untuk melihat harganya.</p>
-        <ul className="choice-list">{result.items.map((product) =>
-          <li key={product.id}><button type="button" className="choice" onClick={() => void search(lastQuery, [], product.id)}>
-            <span><strong>{productName(product)}</strong><small>{productDescription(product)}{product.sku && ` · ${product.sku}`}</small></span>
+        <ul className="choice-list">{result.items.map(({ product, grams }) =>
+          <li key={`${product.id}:${grams ?? ''}`}><button type="button" className="choice" onClick={() => {
+            prepare()
+            void search(lastQuery, [], { product, grams })
+          }}>
+            <span><strong>{productName(product)}</strong><small>{grams === undefined ? productDescription(product) : `${displayWeight(grams)} · harga curah`}{product.sku && ` · ${product.sku}`}</small></span>
             <ArrowRight size={20} aria-hidden="true" />
           </button></li>,
         )}</ul>
       </section>}
-      {online && result.type === 'price' && <section className="result-card price-card" aria-label="Hasil harga">
+      {result.type === 'price' && <section className="result-card price-card" aria-label="Hasil harga">
         <div role="status">
           <div className="eyebrow"><PackageCheck size={18} /> HARGA JUAL</div>
           <h2>{productName(result.product)}</h2>
-          <p className="muted">{productDescription(result.product)}</p>
-          <p className="price">{rupiah(result.product.sale_price)}</p>
+          <p className="muted">{result.grams === undefined
+            ? productDescription(result.product)
+            : `${displayWeight(result.grams)} · ${rupiah(result.product.sale_price)} per kg`}</p>
+          <p className="price">{rupiah(result.amount)}</p>
+          {result.rounded && <p className="muted">Dibulatkan ke atas ke kelipatan {rupiah(result.product.weight_rounding!)}.</p>}
         </div>
         {available
-          ? <button type="button" className="button secondary" onClick={() => speaking ? stop() : speak(priceSpeech(result.product))}>
+          ? <button type="button" className="button secondary" onClick={() => speaking ? stop() : speak(priceAnswer(result))}>
             {speaking ? <Square size={18} /> : <Volume2 size={19} />} {speaking ? 'Hentikan suara' : 'Bacakan harga'}
           </button>
           : <small className="muted">Suara bahasa Indonesia belum tersedia di perangkat ini.</small>}
+        {speaking && <small className="muted" role="status">{playing ? 'Sedang membacakan harga.' : 'Menyiapkan suara…'}</small>}
+        {speechError && <Notice error>{speechError}</Notice>}
       </section>}
     </div>
     <p className="search-footnote"><CircleHelp size={16} aria-hidden="true" /> Harga berasal dari katalog toko Anda.</p>

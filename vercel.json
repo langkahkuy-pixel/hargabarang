@@ -3,9 +3,6 @@
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "functions": {
-    "api/store.ts": { "maxDuration": 15 }
-  },
   "headers": [
     {
       "source": "/sw.js",
